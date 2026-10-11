@@ -134,6 +134,6 @@ Before the first public release, the code was independently reviewed. All findin
 | 6 | Low | **Negative `Content-Length` accepted.** | Requests with a negative length or over 20 KB are rejected. | Fixed |
 | 7 | Low | **Unbounded responses.** The Mac would read an outbox response of any size. | Responses are read up to 5 MB, and at most 100 outbox items are processed per poll. | Fixed |
 
-Other safeguards that were already in place: outbox logs mask phone numbers, unacked outbox items expire after `PENDING_TTL`, each outbox id is sent at most once, and there is a local kill switch. A test (`tests/test_no_shell`) checks that the only subprocess call is the fixed `osascript` one.
+Other safeguards that were already in place: outbox logs mask phone numbers, unacked outbox items expire after `PENDING_TTL`, each outbox id is sent at most once, and there is a local kill switch. A test (`test_no_shell` in `tests/test_smsbridge.py`) checks that the only subprocess call is the fixed `osascript` one.
 
 Thanks to everyone who reports issues responsibly.

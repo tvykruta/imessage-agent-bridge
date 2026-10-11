@@ -34,7 +34,7 @@ Texts out:  your agent → outbox → your Mac checks the rules → Messages
 **Inbound (Mac → agent)**
 1. Opens `~/Library/Messages/chat.db` **read-only** (`file:...?mode=ro`).
 2. Tracks the last seen `message.ROWID` in `~/.smsbridge/state.json`. On first run it starts at `MAX(ROWID)`, so history is never replayed.
-3. Every `poll_seconds` (default 15) it selects `ROWID > last`, decodes `text` (or the `attributedBody` NSAttributedString typedstream when `text` is NULL), and appends to a local on-disk queue.
+3. Every `poll_seconds` (default 15) it selects `ROWID > last`, decodes `text` (or the `attributedBody` NSAttributedString typedstream when `text` is NULL), and appends to a local on-disk queue. It reads at most 200 new messages per poll.
 4. Flushes the queue in order with `POST webhook_url` (Bearer auth). On failure, it stops and keeps the rest on disk, retrying with exponential backoff (15s → 300s max).
 
 **Outbound (agent → Mac)**
@@ -55,7 +55,7 @@ Texts out:  your agent → outbox → your Mac checks the rules → Messages
 - **Allowlist only.** Numbers not on your list are rejected.
 - **Hard limits on the Mac:** 30 texts an hour, 1,000 characters, each text sent once.
 - **Read-only history.** It never edits or replays old messages.
-- **About 200 lines of plain Python with no extra packages.** Easy to read in one sitting.
+- **About 250 lines of plain Python, with no extra packages on the Mac.** Easy to read in one sitting.
 - **Security reviewed.** Every finding was fixed. See [SECURITY.md](SECURITY.md).
 
 ## Why you should still be careful
@@ -83,7 +83,7 @@ Tested with **Grok Bot**. It should work with anything that can receive a webhoo
 
 - Outbox environment variables: `REDIS_URL`, `OUTBOX_TOKEN` (at least 24 characters), `PORT`, and `PENDING_TTL`.
 - Outbox endpoints: `/healthz`, `/outbox`, `/enqueue`, `/ack` and `/status`.
-- All settings are in `config.example.json`.
+- All settings are in `config.example.json`. `tz_offset_hours` sets a fixed UTC offset for message timestamps (for example `-5`). Leave it `null` to use the Mac's local time.
 - Run the tests with `python3 -m unittest discover tests`.
 
 MIT License · [Security policy](SECURITY.md)

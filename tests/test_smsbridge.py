@@ -53,5 +53,8 @@ class T(unittest.TestCase):
             if n[0] == 2: raise OSError("down")
         self.assertEqual(sb.flush_queue(cfg, post), 1); self.assertEqual(sb.flush_queue(cfg, lambda *a: None), 0)
     def test_no_shell(self):
-        src = open(sb.__file__).read(); self.assertNotIn("shell=True", src); self.assertEqual(src.count("subprocess.run"), 1)
+        with open(sb.__file__) as f: src = f.read()
+        self.assertNotIn("shell=True", src); self.assertEqual(src.count("subprocess.run"), 1)
+    def test_email_domain_rejects_leading_hyphen(self):
+        self.assertIsNone(sb.EMAIL_RE.match("a@-example.com")); self.assertIsNotNone(sb.EMAIL_RE.match("a@mail.example.com"))
 if __name__ == "__main__": unittest.main()

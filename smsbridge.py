@@ -138,7 +138,7 @@ def norm(num):
     if len(d) == 10: d = "1" + d
     return "+" + d if 8 <= len(d) <= 15 else ""
 
-EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+][A-Za-z0-9._%+-]*@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
+EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+][A-Za-z0-9._%+-]*@(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\.)+[A-Za-z]{2,}$")
 
 def canon_recipient(to):
     to = str(to or "").strip()
@@ -169,7 +169,7 @@ def check_send(item, cfg, state, contacts_fn=contact_numbers, now=None):
     if not key: return "bad_recipient"
     if key not in allowed and not (cfg["allow_contacts"] and key in {norm(n) for n in contacts_fn()}):
         return "not_allowlisted"
-    recent = [t for t in state.get("send_times", []) if now - t < 3600]
+    recent = [t for t in state.get("send_times", []) if now - t < 3600][-1000:]
     state["send_times"] = recent
     if len(recent) >= cfg["max_sends_per_hour"]: return "rate_limited"
     item["_to"] = key  # only the canonical recipient is ever passed to osascript
