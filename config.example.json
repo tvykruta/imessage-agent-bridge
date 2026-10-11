@@ -1,0 +1,14 @@
+{
+  "enabled": true,
+  "webhook_url": "https://your-agent.example.com/webhook",
+  "webhook_auth": "Bearer YOUR_WEBHOOK_KEY",
+  "outbox_url": "https://your-outbox.example.com/outbox",
+  "ack_url": "https://your-outbox.example.com/ack",
+  "outbox_auth": "Bearer YOUR_OUTBOX_TOKEN",
+  "allowlist": ["+15555550100"],
+  "allow_contacts": false,
+  "max_sends_per_hour": 30,
+  "max_body_len": 1000,
+  "poll_seconds": 15,
+  "tz_offset_hours": null
+}
