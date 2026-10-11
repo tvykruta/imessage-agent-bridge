@@ -27,6 +27,19 @@ Two pieces:
 - Idempotent ids: each outbox id is sent at most once. Repeats are re-acked, never re-sent.
 - Kill switch: `touch ~/.smsbridge/DISABLED` or set `"enabled": false`.
 
+## Compatibility
+
+So far the bridge has only been tested with Grok Bot. It should work with any agent that can receive a webhook and send authenticated HTTP requests. For inbound, point `webhook_url` at the agent's webhook. For outbound, the agent sends `POST /enqueue` with `Authorization: Bearer $OUTBOX_TOKEN`.
+
+These should work but haven't been tested:
+
+- **Claude Code / Claude Desktop**: inbound, set `webhook_url` to an MCP or HTTP webhook endpoint that feeds your session. Outbound, a tool or MCP server that sends `POST /enqueue` with the outbox token.
+- **OpenAI ChatGPT agents / Codex**: inbound, set `webhook_url` to your Actions or Responses relay endpoint. Outbound, a function or Action that sends `POST /enqueue` with the outbox token.
+- **OpenClaw and similar self-hosted agents**: inbound, set `webhook_url` to the agent's webhook or hook endpoint. Outbound, an HTTP tool that sends `POST /enqueue` with the outbox token.
+- **n8n / Zapier / Make**: inbound, set `webhook_url` to a Webhook trigger node or Catch Hook URL. Outbound, an HTTP Request step that sends `POST /enqueue` with the outbox token.
+- **Home Assistant**: inbound, set `webhook_url` to `https://<ha>/api/webhook/<id>` (a webhook automation trigger). Outbound, a `rest_command` that sends `POST /enqueue` with the outbox token.
+- **Custom LangChain / LangGraph agents**: inbound, set `webhook_url` to your FastAPI or Flask route that starts a run. Outbound, a tool that sends `POST /enqueue` with the outbox token.
+
 ## Install
 
 ### 1. Deploy the outbox
