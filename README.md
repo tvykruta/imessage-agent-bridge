@@ -7,6 +7,39 @@ Two pieces:
 - `smsbridge.py` — a ~200-line, stdlib-only Python daemon run by a LaunchAgent on your Mac.
 - `outbox/app.py` — a tiny authenticated HTTP queue (Redis-backed) that the agent writes outbound texts into.
 
+> **Use at your own risk.** This is a free, personal project released as-is under the MIT License, with no warranty. You are responsible for how you set it up and for every message your agent sends. Read [Safety, and why to be careful](#safety-and-why-to-be-careful) before installing.
+
+## What it does
+
+It lets an AI agent text through your Mac's Messages app, and lets it hear replies.
+
+- **Incoming texts:** when someone texts you, the Mac forwards the message (sender, text, time) to your agent's webhook. The agent can then read it and decide what to do.
+- **Outgoing texts:** when your agent wants to send a text, it drops it in a small queue on the internet (the "outbox"). Your Mac checks the queue, makes sure the text follows your rules, sends it from your Messages app, and reports back.
+
+Example use: an assistant that gets replies from contractors by text and answers routine scheduling questions, without you copy-pasting between apps.
+
+## Safety, and why to be careful
+
+**Why it's designed to be safe**
+- **The agent never touches your Mac.** It can't run commands, open files or read your other messages. It can only put texts in the outbox. Your Mac decides whether to send them.
+- **You choose who can be texted.** Only numbers on your allowlist get messages. Texts to anyone else are rejected and logged.
+- **Limits are enforced on your Mac, not by the agent:** a maximum number of texts per hour, a maximum message length, and each text is sent at most once.
+- **History is read-only and never replayed.** The bridge reads your Messages database without changing it, and starts from new messages only.
+- **Instant off switch:** `touch ~/.smsbridge/DISABLED` stops all sending.
+- **Secrets stay private:** the settings file is readable only by you, and tokens are checked safely.
+- **Small and readable:** about 200 lines of plain Python with no outside packages, so you can read the whole thing. It went through a security review, and every finding was fixed. See [SECURITY.md](SECURITY.md).
+
+**Why you should still be careful**
+- **Your agent can still make mistakes.** If it's tricked by a message (prompt injection) or just gets it wrong, it can send a bad text to someone on your allowlist. Keep the allowlist short.
+- **Every incoming text goes to your agent.** That includes private messages and two-factor login codes. Only connect an agent and webhook you trust.
+- **Full Disk Access is powerful.** The helper needs it to read Messages. Anything running as that helper can read files it shouldn't, so only run this exact code.
+- **Anyone who has your outbox token can queue texts** to your allowlisted numbers. Treat it like a password.
+- **Texts go out under your name** from your Apple ID and number. Carrier and Apple rules still apply.
+- **This isn't a supported Apple feature.** macOS updates can break it without warning.
+
+**Disclaimer**
+This software is provided free of charge, "as is", without warranty of any kind. The author isn't responsible for any messages sent, data exposed, costs, account problems, or other harm from using it. By using it, you accept full responsibility. See [LICENSE](LICENSE).
+
 ## How it works
 
 **Inbound (Mac → agent)**
