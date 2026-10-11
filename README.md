@@ -4,23 +4,22 @@
 
 > ⚠️ **Free, as-is, use at your own risk.** No warranty. You're responsible for every text your agent sends. **Do your own security audit before running it.** The code is short, so read `smsbridge.py` and `outbox/app.py` or have someone you trust review them.
 
-## Get started (the easy way)
+## Get started
 
-Your AI agent does most of the work. You need a Mac signed in to Messages, and an agent that can browse the web and run a webhook, like Grok Bot.
+You need a Mac signed in to Messages and an AI agent that can browse the web, like Grok Bot.
 
-1. **Paste [this setup prompt](AGENT_SETUP.md) into your agent** and tell it which numbers it's allowed to text. It sets up the outbox, makes the passwords, and writes your settings.
-2. **Paste the one Terminal command it gives you.** Open **Terminal** (press Cmd+Space and type "Terminal"), paste, and press Return.
-3. **Allow access.** When System Settings opens to **Full Disk Access**, click **+**, press **Cmd+Shift+G**, type `~/Applications`, pick **SMSBridge.app**, and turn it **on**.
-4. **Test.** Text yourself, and your agent should see it. When your agent sends its first text, click **OK** on the Messages prompt.
+1. **Tell your agent:**
+   > Set up https://github.com/tvykruta/imessage-agent-bridge for me. Follow AGENT_SETUP.md. Only let it text these numbers: …
+2. **Do the three things it asks:** paste one Terminal command, turn on Full Disk Access for SMSBridge.app, and click OK on the Messages prompt.
 
-That's it. **Pause anytime:** `touch ~/.smsbridge/DISABLED`. **Remove:** `bash uninstall.sh`.
+**Pause anytime:** `touch ~/.smsbridge/DISABLED`. **Remove:** `bash uninstall.sh`.
 
 <details><summary>Doing it by hand instead</summary>
 
 1. **Outbox:** click New, then Blueprint on [Render](https://render.com), and point it at this repo. `render.yaml` creates the outbox and its storage and generates `OUTBOX_TOKEN`. Copy the service URL and token.
 2. **Mac:** download the ZIP (green **Code** button), then run `bash install.sh` in Terminal.
 3. **Settings:** edit `~/.smsbridge/config.json` with your webhook, your outbox URLs (`/outbox` and `/ack`), `Bearer <OUTBOX_TOKEN>`, and your allowlist.
-4. **Restart:** `launchctl kickstart -k gui/$(id -u)/com.example.smsbridge`, then do steps 3 and 4 above.
+4. **Restart:** `launchctl kickstart -k gui/$(id -u)/com.example.smsbridge`, then turn on Full Disk Access for SMSBridge.app and click OK on the Messages prompt.
 </details>
 
 ## How it works
