@@ -2,6 +2,8 @@
 
 **Let your AI agent text people from your Mac, safely.** Incoming texts go to your agent. Your agent's replies go out through Messages, but only to numbers you approve.
 
+<p align="center"><img src="docs/demo.gif" alt="Demo: a text arrives, the agent drafts a reply, the Mac bridge checks the rules, and Messages sends it" width="720"></p>
+
 > ⚠️ **Free, as-is, use at your own risk.** No warranty. You're responsible for every text your agent sends. **Do your own security audit before running it.** The code is short, so read `smsbridge.py` and `outbox/app.py` or have someone you trust review them.
 
 ## Get started
