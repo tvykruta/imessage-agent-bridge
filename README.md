@@ -99,13 +99,12 @@ Logs: `~/.smsbridge/log.jsonl` (events) and `~/.smsbridge/stderr.log` (crashes).
 
 ## Security model
 
-- The agent never gets a shell on your Mac. It can only (a) receive messages you were already sent and (b) *request* a send through the outbox.
-- The Mac is the policy enforcement point: allowlist, rate limit, body cap, and dedupe are all checked locally before anything is sent.
-- `chat.db` and AddressBook are opened read-only. There is one `subprocess.run` call (`osascript` with a fixed script, args as argv). `tests/test_no_shell` asserts this.
-- Full Disk Access is scoped to one wrapper app.
-- Secrets live only in `~/.smsbridge/config.json` (0600) and in the outbox's env. Never commit `config.json`.
-- Note: `log.jsonl` contains message bodies and numbers in plaintext. Treat it as sensitive.
-- The outbox uses constant-time token comparison, a 20 KB request cap, logs masked numbers only, and expires unacked items.
+- The agent never gets a shell on your Mac. It can only receive texts sent to you and *request* a send through the outbox.
+- The Mac enforces the rules (allowlist, rate limit, body cap, send-once ids) before anything is sent.
+- `chat.db` is opened read-only. Secrets stay in `~/.smsbridge/config.json` (0600) and the outbox's env.
+- `log.jsonl` holds message text and numbers in plaintext. Treat it as sensitive.
+
+See **[SECURITY.md](SECURITY.md)** for the threat model, the past security review, a hardening checklist, and how to report a vulnerability privately.
 
 ## Uninstall
 `bash uninstall.sh`, then remove SMSBridge from Full Disk Access. Run `rm -rf ~/.smsbridge` to delete config and logs.
