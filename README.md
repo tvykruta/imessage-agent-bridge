@@ -29,6 +29,26 @@ Texts in:   Messages → your Mac (read-only) → your agent's webhook
 Texts out:  your agent → outbox → your Mac checks the rules → Messages
 ```
 
+## Under the hood
+
+**Inbound (Mac → agent)**
+1. Opens `~/Library/Messages/chat.db` **read-only** (`file:...?mode=ro`).
+2. Tracks the last seen `message.ROWID` in `~/.smsbridge/state.json`. On first run it starts at `MAX(ROWID)`, so history is never replayed.
+3. Every `poll_seconds` (default 15) it selects `ROWID > last`, decodes `text` (or the `attributedBody` NSAttributedString typedstream when `text` is NULL), and appends to a local on-disk queue.
+4. Flushes the queue in order with `POST webhook_url` (Bearer auth). On failure, it stops and keeps the rest on disk, retrying with exponential backoff (15s → 300s max).
+
+**Outbound (agent → Mac)**
+1. The agent sends `POST /enqueue {id, to, body}` to the outbox service.
+2. The Mac polls `GET /outbox`, checks each item against the guardrails, sends it with a fixed AppleScript template through Messages.app (`osascript` with recipient/body passed as argv, never `shell=True`), then sends `POST /ack {id, status: sent|failed|rejected}`.
+3. The outbox deletes acked items and remembers the ack for 7 days. Re-enqueueing an acked id returns 409.
+
+**Guardrails (enforced on the Mac, not by the agent)**
+- Recipient allowlist (`allowlist`), optionally plus numbers in your Contacts (`allow_contacts`).
+- Rate limit: `max_sends_per_hour` (default 30).
+- Body cap: `max_body_len` (default 1000).
+- Idempotent ids: each outbox id is sent at most once. Repeats are re-acked, never re-sent.
+- Kill switch: `touch ~/.smsbridge/DISABLED` or set `"enabled": false`.
+
 ## Why it's built to be safe
 
 - **No shell for the agent.** It can only *ask* to send a text. Your Mac decides.
