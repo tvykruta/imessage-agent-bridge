@@ -1,0 +1,22 @@
+# One-click outbox on Render: a small web service plus a Key Value (Redis) store.
+services:
+  - type: keyvalue
+    name: imessage-outbox-kv
+    plan: free
+    ipAllowList: []          # private network only
+  - type: web
+    name: imessage-outbox
+    runtime: python
+    plan: free
+    rootDir: outbox
+    buildCommand: pip install -r requirements.txt
+    startCommand: python app.py
+    healthCheckPath: /healthz
+    envVars:
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: imessage-outbox-kv
+          property: connectionString
+      - key: OUTBOX_TOKEN
+        generateValue: true
