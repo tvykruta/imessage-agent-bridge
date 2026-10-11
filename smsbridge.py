@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""SMSBridge: narrow read/send-SMS helper for macOS. Stdlib only.
+"""SMSBridge: narrow read/send-SMS helper for macOS.
 Capabilities: read ~/Library/Messages/chat.db (read-only), send via osascript->Messages.
-Nothing else is executed."""
-import json, os, re, sqlite3, subprocess, sys, time, glob, urllib.request, urllib.error
+Outbound texts arrive encrypted over an ntfy.sh topic (default; needs PyNaCl) or from a
+self-hosted HTTP outbox (stdlib only). Nothing else is executed."""
+import base64, json, os, re, sqlite3, subprocess, sys, time, glob, urllib.parse, urllib.request, urllib.error
 from datetime import datetime, timezone, timedelta
 
 HOME = os.path.expanduser("~")
@@ -17,7 +18,10 @@ APPLE_EPOCH = 978307200
 DEFAULTS = {"enabled": True, "webhook_url": "", "webhook_auth": "", "outbox_url": "",
             "ack_url": "", "outbox_auth": "", "allowlist": [], "allow_contacts": False,
             "max_sends_per_hour": 30, "max_body_len": 1000, "poll_seconds": 15,
-            "tz_offset_hours": None}
+            "tz_offset_hours": None, "outbox_transport": "", "ntfy_server": "https://ntfy.sh",
+            "ntfy_topic": "", "outbox_key": "", "ntfy_acks": False}
+MAX_AGE, MAX_SKEW = 600, 120          # reject items older than 10 min / >2 min in the future
+SEEN_TTL, MAX_BAD_PER_POLL = 86400, 20
 SCRIPT = '''on run argv
   set theTo to item 1 of argv
   set theBody to item 2 of argv
@@ -180,13 +184,11 @@ def send_sms(to, body):
     r = subprocess.run(["/usr/bin/osascript", "-e", SCRIPT, to, body], capture_output=True, text=True, timeout=60)
     if r.returncode != 0: raise RuntimeError(r.stderr.strip()[:300])
 
-def poll_outbox(cfg, state, get=http, sender=send_sms, contacts_fn=contact_numbers):
-    if not cfg["outbox_url"]: return
-    items = get("GET", cfg["outbox_url"], cfg["outbox_auth"]) or []
-    if not isinstance(items, list): return
-    items = [it for it in items[:100] if isinstance(it, dict)]
+def process_items(items, cfg, state, sender=send_sms, contacts_fn=contact_numbers):
+    """Run guardrails and send. Returns [(id, status, error)]. Each id is sent at most once."""
     sent_ids = state.setdefault("sent_ids", {})
     state.setdefault("send_times", [])
+    out = []
     for it in items:
         iid = str(it.get("id", ""))
         if not iid: continue
@@ -204,9 +206,97 @@ def poll_outbox(cfg, state, get=http, sender=send_sms, contacts_fn=contact_numbe
                 status = "rejected"
             sent_ids[iid] = status; save_json(STATE, state)
             log("send", id=iid, to=it.get("to"), body=it.get("body"), status=status, error=err)
+        out.append((iid, status, err))
+    return out
+
+def transport(cfg):
+    t = cfg.get("outbox_transport")
+    if t in ("ntfy", "http"): return t
+    return "http" if cfg.get("outbox_url") and not cfg.get("ntfy_topic") else "ntfy"
+
+# ---------- ntfy transport (encrypted; relay is untrusted) ----------
+def _box(key_b64):
+    try:
+        from nacl.secret import SecretBox
+    except ImportError:
+        raise RuntimeError("PyNaCl missing: rerun install.sh (ntfy mode needs it)")
+    key = base64.urlsafe_b64decode(key_b64 + "=" * (-len(key_b64) % 4))
+    if len(key) != 32: raise ValueError("outbox_key must be 32 bytes, base64")
+    return SecretBox(key)
+
+def encrypt_item(key_b64, item):
+    """Reference sender side: returns the ntfy message body for {id,to,body}."""
+    return encrypt_json(key_b64, {"id": item["id"], "to": item["to"], "body": item["body"],
+                                  "ts": int(item.get("ts", time.time()))})
+
+def encrypt_json(key_b64, obj):
+    import nacl.utils
+    return base64.b64encode(bytes(_box(key_b64).encrypt(json.dumps(obj).encode(), nacl.utils.random(24)))).decode()
+
+def decrypt_item(box, text, state, now=None):
+    """Return the item dict or raise ValueError(reason). Checks MAC, age and replay."""
+    now = now or time.time()
+    try:
+        raw = base64.b64decode(text.strip(), validate=True)
+        it = json.loads(box.decrypt(raw).decode())
+    except Exception:
+        raise ValueError("bad_ciphertext")
+    if not isinstance(it, dict) or not isinstance(it.get("ts"), (int, float)): raise ValueError("bad_payload")
+    if it["ts"] < now - MAX_AGE: raise ValueError("stale")
+    if it["ts"] > now + MAX_SKEW: raise ValueError("future")
+    seen = state.setdefault("seen_ids", {})
+    for k in [k for k, t in seen.items() if now - t > SEEN_TTL]: del seen[k]
+    iid = str(it.get("id", ""))
+    if not iid: raise ValueError("bad_payload")
+    if iid in seen or iid in state.get("sent_ids", {}): raise ValueError("replay")
+    seen[iid] = now
+    return it
+
+def http_text(method, url, data=None, timeout=20, headers=None):
+    req = urllib.request.Request(url, data=data, method=method)
+    for k, v in (headers or {}).items(): req.add_header(k, v)
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.read(5_000_000).decode("utf-8", "replace")
+
+def poll_ntfy(cfg, state, fetch=http_text, sender=send_sms, contacts_fn=contact_numbers, now=None):
+    topic, server = cfg["ntfy_topic"], cfg["ntfy_server"].rstrip("/")
+    if not topic or not cfg["outbox_key"]: return
+    box = _box(cfg["outbox_key"])
+    since = state.get("ntfy_since") or str(int(now or time.time()) - MAX_AGE)  # first run: last 10 min only
+    url = "%s/%s/json?poll=1&since=%s" % (server, urllib.parse.quote(topic, safe=""), urllib.parse.quote(since, safe=""))
+    lines = [l for l in fetch("GET", url).splitlines() if l.strip()][:200]
+    items, bad = [], 0
+    for line in lines:
+        try: ev = json.loads(line)
+        except ValueError: continue
+        if ev.get("event") != "message": continue
+        state["ntfy_since"] = str(ev.get("id") or since)
+        if bad >= MAX_BAD_PER_POLL: continue
+        try:
+            items.append(decrypt_item(box, ev.get("message", ""), state, now))
+        except ValueError as e:
+            bad += 1; log("ntfy_reject", ntfy_id=ev.get("id"), reason=str(e))
+    save_json(STATE, state)
+    for iid, status, err in process_items(items, cfg, state, sender, contacts_fn):
+        if cfg.get("ntfy_acks"):
+            try:
+                body = encrypt_json(cfg["outbox_key"], {"id": iid, "status": status, "error": err, "ts": int(time.time())})
+                fetch("POST", "%s/%s" % (server, urllib.parse.quote(topic + "-acks", safe="")), body.encode())
+            except Exception as e: log("ack_error", id=iid, error=str(e)[:200])
+
+# ---------- http transport (self-hosted outbox/app.py) ----------
+def poll_outbox(cfg, state, get=http, sender=send_sms, contacts_fn=contact_numbers):
+    if not cfg["outbox_url"]: return
+    items = get("GET", cfg["outbox_url"], cfg["outbox_auth"]) or []
+    if not isinstance(items, list): return
+    items = [it for it in items[:100] if isinstance(it, dict)]
+    for iid, status, err in process_items(items, cfg, state, sender, contacts_fn):
         if cfg["ack_url"]:
             try: get("POST", cfg["ack_url"], cfg["outbox_auth"], {"id": iid, "status": status, "error": err})
             except Exception as e: log("ack_error", id=iid, error=str(e)[:200])
+
+def poll_outbound(cfg, state):
+    return poll_ntfy(cfg, state) if transport(cfg) == "ntfy" else poll_outbox(cfg, state)
 
 def main():
     os.umask(0o077)  # state/log/queue contain message text: owner-only
@@ -225,7 +315,7 @@ def main():
         try: poll_inbound(cfg, state)
         except Exception as e: log("read_error", error=str(e)[:300]); ok = False
         if flush_queue(cfg): ok = False
-        try: poll_outbox(cfg, state)
+        try: poll_outbound(cfg, state)
         except Exception as e: log("outbox_error", error=str(e)[:300]); ok = False
         backoff = 0 if ok else min(300, max(15, backoff * 2))
         time.sleep(backoff or cfg["poll_seconds"])

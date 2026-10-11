@@ -2,7 +2,7 @@
 
 ## Audit before you run
 
-We strongly recommend that every user does their own security audit before running this code. It has Full Disk Access to read your Messages and sends texts under your identity. The review below is a snapshot, not a guarantee. Read `smsbridge.py`, `outbox/app.py` and the install scripts yourself (or have someone you trust do it), and install the exact commit you reviewed.
+We strongly recommend that every user does their own security audit before running this code. It has Full Disk Access to read your Messages and sends texts under your identity. The review below is a snapshot, not a guarantee. Read `smsbridge.py`, `send.py`, `outbox/app.py` and the install scripts yourself (or have someone you trust do it), and install the exact commit you reviewed.
 
 
 This project lets an AI agent read and send iMessage/SMS on your Mac. That is sensitive, so this page explains, in plain language, what the bridge protects, what it does not, and how to report a problem.
@@ -45,16 +45,18 @@ We follow coordinated disclosure. Please give us a reasonable chance to fix the 
 **In scope**
 
 - `smsbridge.py` (the Mac helper)
-- `outbox/app.py` (the outbox service)
+- `send.py` (the reference sender) and the ntfy message format
+- `outbox/app.py` (the optional self-hosted outbox)
 - `install.sh` / `uninstall.sh`
-- Anything that lets someone text a number that isn't allowed, enqueue without the token, read messages they shouldn't, run commands on the Mac, or get secrets.
+- Anything that lets someone text a number that isn't allowed, queue a text without the key or token, replay an old text, read messages they shouldn't, run commands on the Mac, or get secrets.
 
 **Out of scope**
 
-- Bugs in macOS, Messages.app, Apple's Python, Redis, or your hosting provider (report those upstream).
+- Bugs in macOS, Messages.app, Apple's Python, PyNaCl, ntfy, Redis, or your hosting provider (report those upstream).
 - Your AI agent's own behavior (see the threat model below).
 - Attacks that need someone to already control your Mac user account.
 - Denial of service against a self-hosted outbox from someone who already has the token.
+- Someone who knows the ntfy topic flooding it with junk (this can delay or drop real texts, but can't send anything).
 
 ## Threat model (plain English)
 
@@ -62,14 +64,17 @@ We follow coordinated disclosure. Please give us a reasonable chance to fix the 
 
 - **Who can be texted.** The Mac decides, not the agent. A send only goes out if the recipient is on your `allowlist` (or in your Contacts, only if you turn `allow_contacts` on). Numbers are compared in full (`+<country><number>`), not by their last digits.
 - **How much can be sent.** At most `max_sends_per_hour` (default 30) texts per hour, each at most `max_body_len` (default 1000) characters. Each outbox id is sent at most once.
-- **Who can queue a text.** Only someone with the outbox token. The token must be at least 24 characters and is compared in constant time.
+- **Who can queue a text.** In the default ntfy mode, only someone with the 32-byte `outbox_key`. Each text is encrypted and authenticated (PyNaCl SecretBox, XSalsa20-Poly1305). Notes that fail to decrypt, are older than 10 minutes, more than 2 minutes in the future, or reuse an id (remembered for 24 hours) are dropped. At most 20 bad notes are processed per poll. In self-hosted HTTP mode, only someone with the outbox token (at least 24 characters, compared in constant time).
+- **Your Mac's network exposure.** The Mac opens no ports. It only makes outgoing HTTPS requests to your webhook and the relay or outbox.
 - **Your Mac's shell.** The agent never gets a shell. The helper runs exactly one external program: `osascript` with a fixed script, with the recipient and message passed as arguments (no `shell=True`, no string building).
 - **Your secrets on disk.** `~/.smsbridge/` is owner-only (folder `0700`, files created with umask `077`, `config.json` set to `0600`).
 
 ### What the bridge does NOT protect against
 
 - **A compromised Mac.** Anyone running code as your user can read `chat.db`, your config, and your logs directly. The bridge can't help there.
-- **A leaked outbox token.** Whoever has it can queue texts. The Mac still enforces the allowlist and rate limit, so they can only text allowed numbers, but they can do that. Rotate the token if it leaks.
+- **A leaked outbox key (or token).** Whoever has the key and the topic can queue texts. The Mac still enforces the allowlist and rate limit, so they can only text allowed numbers, but they can do that. Rotate it if it leaks (see below).
+- **A leaked topic alone** is low risk: someone can see when encrypted notes are posted and their size, and can post junk that gets dropped. They can't read, forge or replay texts. Flooding could push you past ntfy.sh's limits, so rotate the topic if it's abused.
+- **The public relay's availability.** ntfy.sh is a free, best-effort service. It keeps notes about 12 hours, caps messages at 4096 bytes, and limits about 250 messages a day per IP. Use a self-hosted ntfy server or your own outbox if you need more.
 - **A leaked webhook key or a compromised agent endpoint.** Inbound messages are forwarded to your webhook. Whoever controls that endpoint sees your incoming texts.
 - **Your agent being tricked.** If an incoming text or web page manipulates your agent (prompt injection) into texting someone *on your allowlist*, the bridge will send it. Keep the allowlist short.
 - **Apple Messages itself.** Delivery, encryption, and spam are Apple's responsibility.
@@ -79,14 +84,16 @@ We follow coordinated disclosure. Please give us a reasonable chance to fix the 
 
 ```
 Incoming text -> Messages -> chat.db --(read-only)--> smsbridge.py --(HTTPS + webhook key)--> your agent
-Your agent --(HTTPS + outbox token)--> outbox (Redis) <--(poll + outbox token)-- smsbridge.py --(osascript)--> Messages -> recipient
+Your agent --(HTTPS, encrypted with outbox_key)--> ntfy.sh/<topic> <--(poll)-- smsbridge.py --(decrypt + guardrails, osascript)--> Messages -> recipient
+(optional self-hosted mode: agent --(outbox token)--> outbox (Redis) <--(poll + token)-- smsbridge.py)
 ```
 
 | Secret / data | Where it lives |
 |---|---|
-| Webhook key, outbox token | `~/.smsbridge/config.json` (mode `0600`) on the Mac |
+| Webhook key, ntfy topic, outbox key (or outbox token) | `~/.smsbridge/config.json` (mode `0600`) on the Mac, and with your agent |
+| Queued outbound texts (ntfy mode) | ntfy.sh, encrypted, for up to about 12 hours |
 | Outbox token | Outbox service environment variable `OUTBOX_TOKEN` |
-| Queued outbound texts | Redis on the outbox host, until acked or until `PENDING_TTL` (default 24h) expires them |
+| Queued outbound texts (HTTP mode) | Redis on the outbox host, until acked or until `PENDING_TTL` (default 24h) expires them |
 | Ack records (status only) | Redis, for 7 days |
 | Incoming texts waiting to forward | `~/.smsbridge/inbound_queue.jsonl` |
 | Event log | `~/.smsbridge/log.jsonl`, **includes full phone numbers and message text** |
@@ -110,13 +117,13 @@ Separately, macOS asks once whether SMSBridge may "control Messages" (Automation
 
 - [ ] Keep `allowlist` short and use full international numbers (`+15555550100`).
 - [ ] Leave `allow_contacts` set to `false` unless you really need it.
-- [ ] Generate a long random outbox token: `python3 -c 'import secrets;print(secrets.token_urlsafe(32))'`.
+- [ ] Self-hosted mode: generate a long random outbox token: `python3 -c 'import secrets;print(secrets.token_urlsafe(32))'`.
 - [ ] Use different values for the webhook key and the outbox token.
 - [ ] Serve the outbox and webhook over HTTPS only.
 - [ ] Check permissions: `ls -la ~/.smsbridge` should show only your user.
 - [ ] Never commit `config.json` (it's in `.gitignore`).
 - [ ] Lower `max_sends_per_hour` to what you actually need.
-- [ ] Rotate tokens if you think they leaked, and check `log.jsonl` for unexpected sends.
+- [ ] Rotate secrets if you think they leaked, and check `log.jsonl` for unexpected sends. To rotate the ntfy topic and key: remove `ntfy_topic` and `outbox_key` from `config.json`, rerun `bash install.sh`, give your agent the new two lines, then restart.
 - [ ] Know the kill switch: `touch ~/.smsbridge/DISABLED` (or set `"enabled": false`) stops all reading and sending within about 15 seconds.
 - [ ] Delete old logs if you don't need them: `log.jsonl` keeps message text.
 
