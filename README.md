@@ -8,6 +8,8 @@ Two pieces:
 - `outbox/app.py` — a tiny authenticated HTTP queue (Redis-backed) that the agent writes outbound texts into.
 
 > **Use at your own risk.** This is a free, personal project released as-is under the MIT License, with no warranty. You are responsible for how you set it up and for every message your agent sends. Read [Safety, and why to be careful](#safety-and-why-to-be-careful) before installing.
+>
+> **Do your own security audit before running it.** This code reads your private messages and sends texts as you. Don't rely on our review alone: read `smsbridge.py` and `outbox/app.py` yourself (they're short), or have someone you trust review them, and check the exact version you install.
 
 ## What it does
 
@@ -36,6 +38,9 @@ Example use: an assistant that gets replies from contractors by text and answers
 - **Anyone who has your outbox token can queue texts** to your allowlisted numbers. Treat it like a password.
 - **Texts go out under your name** from your Apple ID and number. Carrier and Apple rules still apply.
 - **This isn't a supported Apple feature.** macOS updates can break it without warning.
+
+**Audit it yourself first**
+We strongly recommend that everyone does their own security audit before running this. Read the code, check that the guardrails fit your setup, and pin the exact commit you reviewed. A past review doesn't guarantee it's safe for you.
 
 **Disclaimer**
 This software is provided free of charge, "as is", without warranty of any kind. The author isn't responsible for any messages sent, data exposed, costs, account problems, or other harm from using it. By using it, you accept full responsibility. See [LICENSE](LICENSE).

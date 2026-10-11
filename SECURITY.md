@@ -1,5 +1,10 @@
 # Security Policy
 
+## Audit before you run
+
+We strongly recommend that every user does their own security audit before running this code. It has Full Disk Access to read your Messages and sends texts under your identity. The review below is a snapshot, not a guarantee. Read `smsbridge.py`, `outbox/app.py` and the install scripts yourself (or have someone you trust do it), and install the exact commit you reviewed.
+
+
 This project lets an AI agent read and send iMessage/SMS on your Mac. That is sensitive, so this page explains, in plain language, what the bridge protects, what it does not, and how to report a problem.
 
 ## Supported versions
