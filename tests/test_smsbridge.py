@@ -47,11 +47,12 @@ class T(unittest.TestCase):
         self.assertEqual(calls, ["+15555550100"]); self.assertEqual([a["status"] for a in acks], ["sent", "rejected"] * 2)
     def test_queue_retry(self):
         with open(sb.QUEUE, "w") as f: f.write('{"rowid":1}\n{"rowid":2}\n')
-        cfg = dict(self.cfg, webhook_url="https://x/h"); n = [0]
-        def post(m, u, a, p):
-            n[0] += 1
+        cfg = dict(self.cfg, webhook_url="https://hooks.agent.test/h"); n = [0]; keys = []
+        def post(m, u, a, p, headers=None):
+            n[0] += 1; keys.append(headers["Idempotency-Key"])
             if n[0] == 2: raise OSError("down")
-        self.assertEqual(sb.flush_queue(cfg, post), 1); self.assertEqual(sb.flush_queue(cfg, lambda *a: None), 0)
+        self.assertEqual(sb.flush_queue(cfg, post), 1); self.assertEqual(sb.flush_queue(cfg, lambda *a, **k: None), 0)
+        self.assertEqual(keys, ["imab-1", "imab-2"])  # same key on retry -> receiver can dedupe
     def test_no_shell(self):
         with open(sb.__file__) as f: src = f.read()
         self.assertNotIn("shell=True", src); self.assertEqual(src.count("subprocess.run"), 1)
@@ -114,5 +115,65 @@ class Ntfy(unittest.TestCase):
         try: send.send("5555550100", "from send.py", "imab-test", self.key)
         finally: urllib.request.urlopen = orig
         self.run_poll([captured[0].data.decode()]); self.assertEqual(self.sent, [("+15555550100", "from send.py")])
+
+class Setup(unittest.TestCase):
+    """Install problems reported by a real user: placeholders, empty URL, empty allowlist, certs, zsh."""
+    def setUp(self):
+        self.d = tempfile.mkdtemp(); sb.LOG = os.path.join(self.d, "log"); sb.STATE = os.path.join(self.d, "st")
+        self.good = dict(sb.DEFAULTS, webhook_url="https://hooks.agent.test/in", webhook_auth="Bearer abc123",
+                         allowlist=["+15555550100"], ntfy_topic="imab-xyz",
+                         outbox_key=__import__("base64").urlsafe_b64encode(b"k" * 32).decode())
+    def test_good_config_has_no_problems(self):
+        self.assertEqual(sb.config_problems(self.good), [])
+    def test_placeholder_key_rejected(self):
+        self.assertTrue(sb.config_problems(dict(self.good, webhook_auth="Bearer PASTE_KEY_HERE")))
+        self.assertTrue(sb.config_problems(dict(self.good, webhook_auth="Bearer YOUR_WEBHOOK_KEY")))
+        for k in ["PASTE_KEY_HERE", "", "two words", "<key>"]:
+            with self.assertRaises(ValueError): sb.apply_answers(self.good, key=k)
+        self.assertEqual(sb.apply_answers(self.good, key="Bearer s3cr3t")["webhook_auth"], "Bearer s3cr3t")
+    def test_bad_webhook_url_is_plain_english(self):
+        for u in ["", "http://hooks.agent.test/in", "hooks.agent.test", "https://your-agent.example.com/webhook", "https://x"]:
+            msg = sb.check_webhook(dict(self.good, webhook_url=u)); self.assertTrue(msg, u); self.assertIn("webhook_url", msg)
+        self.assertIsNone(sb.check_webhook(self.good))
+        self.assertIn("server name could not be found", sb.explain(OSError("nodename nor servname provided")))
+        self.assertIn("certifi", sb.explain(OSError("[SSL: CERTIFICATE_VERIFY_FAILED] unable to get local issuer")))
+    def test_empty_allowlist_flagged_and_parsed(self):
+        self.assertTrue(any("allowlist" in p for p in sb.config_problems(dict(self.good, allowlist=[]))))
+        self.assertEqual(sb.apply_answers(self.good, allow="(555) 555-0100, +1 555 555 0101")["allowlist"], ["+15555550100", "+15555550101"])
+        with self.assertRaises(ValueError): sb.apply_answers(self.good, allow="call mom")
+    def test_allow_all(self):
+        st = {}; c = dict(self.good, allow_all=True, allowlist=[])
+        self.assertIsNone(sb.check_send({"to": "5555550199", "body": "hi"}, c, st, lambda: set()))
+        self.assertEqual(sb.config_problems(c), [])
+        self.assertEqual(sb.check_send({"to": "-e x", "body": "hi"}, c, st, lambda: set()), "bad_recipient")
+    def test_setup_writes_private_config_without_placeholders(self):
+        import builtins, getpass
+        p = os.path.join(self.d, "config.json"); sb.write_config(dict(self.good, webhook_url="", webhook_auth="", allowlist=[]), p)
+        answers = iter(["https://hooks.agent.test/in", "+15555550100"])
+        oi, og = builtins.input, getpass.getpass
+        builtins.input = lambda *a: next(answers); getpass.getpass = lambda *a: "realkey123"
+        try: sb.setup(["--no-test"], p)
+        finally: builtins.input, getpass.getpass = oi, og
+        c = json.load(open(p)); self.assertEqual(c["webhook_auth"], "Bearer realkey123"); self.assertEqual(c["allowlist"], ["+15555550100"])
+        self.assertEqual(os.stat(p).st_mode & 0o777, 0o600); self.assertEqual(sb.config_problems(c), [])
+    def test_ssl_context_uses_certifi(self):
+        self.assertIsInstance(sb.ssl_context(), __import__("ssl").SSLContext)
+    def test_doctor_reports(self):
+        lines = []
+        n = sb.doctor(dict(self.good, webhook_auth="Bearer PASTE_KEY_HERE"), lines.append, os.path.join(self.d, "none"),
+                      fetch=lambda *a, **k: "", post=lambda *a, **k: None)
+        self.assertGreaterEqual(n, 2); self.assertTrue(any("FIX" in l and "config" in l for l in lines))
+    def test_reject_logs_clock(self):
+        import base64, time
+        key = self.good["outbox_key"]; box = sb._box(key)
+        msg = sb.encrypt_item(key, {"id": "f", "to": "5555550100", "body": "hi", "ts": time.time() + 3600})
+        sb.poll_ntfy(self.good, {}, lambda m, u, data=None: json.dumps({"id": "n", "event": "message", "message": msg, "time": 1}),
+                     lambda t, b: None, lambda: set())
+        e = [json.loads(l) for l in open(sb.LOG) if "ntfy_reject" in l][0]
+        self.assertEqual(e["reason"], "future"); self.assertIn("mac_time", e); self.assertGreater(e["note_ts"], e["mac_time"]); self.assertTrue(e["hint"])
+    def test_installer_has_no_zsh_only_or_placeholder_traps(self):
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        src = open(os.path.join(root, "install.sh")).read() + open(os.path.join(root, "config.example.json")).read()
+        self.assertNotIn("read -p", src); self.assertNotIn("PASTE_KEY_HERE", src); self.assertNotIn("YOUR_WEBHOOK_KEY", src)
 
 if __name__ == "__main__": unittest.main()

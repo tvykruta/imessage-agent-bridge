@@ -1,19 +1,22 @@
 {
   "enabled": true,
-  "webhook_url": "https://your-agent.example.com/webhook",
-  "webhook_auth": "Bearer YOUR_WEBHOOK_KEY",
+  "webhook_url": "",
+  "webhook_auth": "",
   "outbox_transport": "ntfy",
   "ntfy_server": "https://ntfy.sh",
-  "ntfy_topic": "imab-GENERATED_BY_INSTALL_SH",
-  "outbox_key": "GENERATED_BY_INSTALL_SH",
+  "ntfy_topic": "",
+  "outbox_key": "",
   "ntfy_acks": false,
   "outbox_url": "",
   "ack_url": "",
   "outbox_auth": "",
-  "allowlist": ["+15555550100"],
+  "allowlist": [
+    "+15555550100"
+  ],
   "allow_contacts": false,
   "max_sends_per_hour": 30,
   "max_body_len": 1000,
   "poll_seconds": 15,
-  "tz_offset_hours": null
+  "tz_offset_hours": null,
+  "allow_all": false
 }
